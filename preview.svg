@@ -1,0 +1,447 @@
+from __future__ import annotations
+
+import io
+import json
+import math
+import zipfile
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from typing import Dict, List, Tuple
+
+import numpy as np
+from matplotlib.font_manager import FontProperties
+from matplotlib.textpath import TextPath
+from svgwrite import Drawing
+from svgwrite.path import Path
+
+MM_PER_INCH = 25.4
+PT_TO_MM = 25.4 / 72.0
+
+FONT_MAP = {
+    "Modern Sans": "DejaVu Sans",
+    "Classic Serif": "DejaVu Serif",
+    "Monoline": "DejaVu Sans Mono",
+    "Rounded": "DejaVu Sans",
+}
+
+PREVIEW_COLORS = {
+    "Warm White": "#ffe9b5",
+    "Cool White": "#eef8ff",
+    "Red": "#ff4c57",
+    "Pink": "#ff79c6",
+    "Orange": "#ff9f43",
+    "Yellow": "#ffd93d",
+    "Green": "#4cff88",
+    "Blue": "#4da6ff",
+    "Purple": "#b388ff",
+}
+
+ACRYLIC_PRESETS = {
+    "3mm Clear Acrylic": {
+        "xtool_profile": "Select the closest 3mm clear/transparent acrylic profile in xTool EasySet",
+        "notes": [
+            "Clear acrylic is commonly used for edge-lit and hidden-back designs.",
+            "Turn on air assist.",
+            "Verify the exact profile in xTool EasySet before cutting because xTool states EasySet is the primary source for definitive parameters.",
+        ],
+    },
+    "3mm White Acrylic": {
+        "xtool_profile": '1/8"(3mm) White Acrylic',
+        "notes": [
+            "Good for a clean opaque backing.",
+            "Remove the protective film before processing if the selected xTool material guidance requires it.",
+            "Turn on air assist and use ventilation.",
+        ],
+    },
+    "3mm Black Acrylic": {
+        "xtool_profile": '1/8"(3mm) Black Acrylic',
+        "notes": [
+            "Useful when you want the backing to disappear visually behind the neon.",
+            "Turn on air assist and use ventilation.",
+            "Verify the exact profile inside EasySet/XCS before running production cuts.",
+        ],
+    },
+    "6mm White Acrylic": {
+        "xtool_profile": '1/4"(6mm) White Acrylic',
+        "notes": [
+            "Stiffer backing for larger signs.",
+            "xTool flags acrylic as flammable, recommends ventilation, cleaning after processing, and air assist.",
+            "Confirm the profile in EasySet at job time.",
+        ],
+    },
+    "6mm Black Acrylic": {
+        "xtool_profile": '1/4"(6mm) Black Acrylic',
+        "notes": [
+            "Stiffer backing for larger signs.",
+            "Turn on air assist and use ventilation.",
+            "Confirm the profile in EasySet at job time.",
+        ],
+    },
+}
+
+DECOR_SHAPES = {
+    "None": [],
+    "Stars": ["star", "star"],
+    "Hearts": ["heart", "heart"],
+    "Sparkles": ["sparkle", "sparkle", "sparkle"],
+}
+
+
+@dataclass
+class SignSpec:
+    text: str
+    font_label: str
+    led_color_name: str
+    backing_color: str
+    backing_material: str
+    width_in: float
+    height_in: float
+    backing_style: str
+    mount_style: str
+    decor_style: str
+    margin_in: float
+    hole_diameter_mm: float
+    led_channel_offset_mm: float
+    shelf_feet_depth_in: float
+
+
+def _font_prop(label: str) -> FontProperties:
+    family = FONT_MAP.get(label, "DejaVu Sans")
+    return FontProperties(family=family, weight="bold")
+
+
+def build_text_geometry(text: str, font_label: str, target_width_mm: float, target_height_mm: float) -> Dict:
+    tp = TextPath((0, 0), text, size=1, prop=_font_prop(font_label), usetex=False)
+    bbox = tp.get_extents()
+    width = max(bbox.width, 1e-6)
+    height = max(bbox.height, 1e-6)
+
+    scale = min(target_width_mm / width, target_height_mm / height)
+    vertices = tp.vertices.copy()
+    codes = tp.codes.copy()
+
+    vertices[:, 0] = (vertices[:, 0] - bbox.x0) * scale
+    vertices[:, 1] = (vertices[:, 1] - bbox.y0) * scale
+
+    return {
+        "vertices": vertices,
+        "codes": codes,
+        "width_mm": width * scale,
+        "height_mm": height * scale,
+    }
+
+
+def matplotlib_path_to_svg_d(vertices: np.ndarray, codes: np.ndarray, y_flip_base: float) -> str:
+    parts: List[str] = []
+    i = 0
+    while i < len(codes):
+        code = codes[i]
+        x, y = vertices[i]
+        y = y_flip_base - y
+        if code == 1:  # MOVETO
+            parts.append(f"M {x:.3f} {y:.3f}")
+            i += 1
+        elif code == 2:  # LINETO
+            parts.append(f"L {x:.3f} {y:.3f}")
+            i += 1
+        elif code == 3:  # CURVE3
+            x1, y1 = vertices[i]
+            x2, y2 = vertices[i + 1]
+            parts.append(f"Q {x1:.3f} {y_flip_base - y1:.3f} {x2:.3f} {y_flip_base - y2:.3f}")
+            i += 2
+        elif code == 4:  # CURVE4
+            x1, y1 = vertices[i]
+            x2, y2 = vertices[i + 1]
+            x3, y3 = vertices[i + 2]
+            parts.append(
+                f"C {x1:.3f} {y_flip_base - y1:.3f} {x2:.3f} {y_flip_base - y2:.3f} {x3:.3f} {y_flip_base - y3:.3f}"
+            )
+            i += 3
+        elif code == 79:  # CLOSEPOLY
+            parts.append("Z")
+            i += 1
+        else:
+            i += 1
+    return " ".join(parts)
+
+
+def rounded_rect_path(x: float, y: float, w: float, h: float, r: float) -> str:
+    r = min(r, w / 2, h / 2)
+    return (
+        f"M {x+r:.3f} {y:.3f} "
+        f"L {x+w-r:.3f} {y:.3f} "
+        f"Q {x+w:.3f} {y:.3f} {x+w:.3f} {y+r:.3f} "
+        f"L {x+w:.3f} {y+h-r:.3f} "
+        f"Q {x+w:.3f} {y+h:.3f} {x+w-r:.3f} {y+h:.3f} "
+        f"L {x+r:.3f} {y+h:.3f} "
+        f"Q {x:.3f} {y+h:.3f} {x:.3f} {y+h-r:.3f} "
+        f"L {x:.3f} {y+r:.3f} "
+        f"Q {x:.3f} {y:.3f} {x+r:.3f} {y:.3f} Z"
+    )
+
+
+def capsule_path(x: float, y: float, w: float, h: float) -> str:
+    r = h / 2
+    return rounded_rect_path(x, y, w, h, r)
+
+
+def arch_path(x: float, y: float, w: float, h: float) -> str:
+    arch_h = h * 0.45
+    rect_h = h - arch_h
+    left = x
+    right = x + w
+    top = y
+    bottom = y + h
+    mid = x + w / 2
+    return (
+        f"M {left:.3f} {bottom:.3f} "
+        f"L {left:.3f} {top+arch_h:.3f} "
+        f"Q {mid:.3f} {top-arch_h*0.2:.3f} {right:.3f} {top+arch_h:.3f} "
+        f"L {right:.3f} {bottom:.3f} Z"
+    )
+
+
+def get_backing_path(style: str, width_mm: float, height_mm: float) -> str:
+    if style == "Rounded Rectangle":
+        return rounded_rect_path(0, 0, width_mm, height_mm, min(width_mm, height_mm) * 0.08)
+    if style == "Capsule":
+        return capsule_path(0, 0, width_mm, height_mm)
+    if style == "Arch":
+        return arch_path(0, 0, width_mm, height_mm)
+    return rounded_rect_path(0, 0, width_mm, height_mm, 2)
+
+
+def circle_path(cx: float, cy: float, r: float) -> str:
+    return (
+        f"M {cx-r:.3f} {cy:.3f} "
+        f"a {r:.3f} {r:.3f} 0 1 0 {2*r:.3f} 0 "
+        f"a {r:.3f} {r:.3f} 0 1 0 {-2*r:.3f} 0 Z"
+    )
+
+
+def slot_path(cx: float, cy: float, w: float, h: float, r: float = 1.5) -> str:
+    return rounded_rect_path(cx - w / 2, cy - h / 2, w, h, r)
+
+
+def star_points(cx: float, cy: float, outer_r: float, inner_r: float, points: int = 5) -> List[Tuple[float, float]]:
+    coords = []
+    angle = -math.pi / 2
+    step = math.pi / points
+    for i in range(points * 2):
+        r = outer_r if i % 2 == 0 else inner_r
+        coords.append((cx + math.cos(angle) * r, cy + math.sin(angle) * r))
+        angle += step
+    return coords
+
+
+def points_to_path(points: List[Tuple[float, float]]) -> str:
+    if not points:
+        return ""
+    start = points[0]
+    rest = " ".join(f"L {x:.3f} {y:.3f}" for x, y in points[1:])
+    return f"M {start[0]:.3f} {start[1]:.3f} {rest} Z"
+
+
+def heart_path(cx: float, cy: float, size: float) -> str:
+    s = size
+    return (
+        f"M {cx:.3f} {cy + s*0.45:.3f} "
+        f"C {cx - s:.3f} {cy - s*0.15:.3f} {cx - s*0.95:.3f} {cy - s:.3f} {cx:.3f} {cy - s*0.35:.3f} "
+        f"C {cx + s*0.95:.3f} {cy - s:.3f} {cx + s:.3f} {cy - s*0.15:.3f} {cx:.3f} {cy + s*0.45:.3f} Z"
+    )
+
+
+def sparkle_path(cx: float, cy: float, size: float) -> str:
+    pts = [
+        (cx, cy - size),
+        (cx + size * 0.22, cy - size * 0.22),
+        (cx + size, cy),
+        (cx + size * 0.22, cy + size * 0.22),
+        (cx, cy + size),
+        (cx - size * 0.22, cy + size * 0.22),
+        (cx - size, cy),
+        (cx - size * 0.22, cy - size * 0.22),
+    ]
+    return points_to_path(pts)
+
+
+def add_decor_paths(dwg: Drawing, style: str, width_mm: float, height_mm: float) -> List[str]:
+    shapes = DECOR_SHAPES.get(style, [])
+    if not shapes:
+        return []
+    positions = [
+        (width_mm * 0.15, height_mm * 0.2, 12),
+        (width_mm * 0.85, height_mm * 0.22, 10),
+        (width_mm * 0.8, height_mm * 0.78, 9),
+    ]
+    paths = []
+    for (shape, (cx, cy, s)) in zip(shapes, positions):
+        if shape == "star":
+            p = points_to_path(star_points(cx, cy, s, s * 0.45))
+        elif shape == "heart":
+            p = heart_path(cx, cy, s)
+        else:
+            p = sparkle_path(cx, cy, s)
+        paths.append(p)
+    return paths
+
+
+def estimate_led_length_mm(text_width_mm: float, text_height_mm: float, decor_count: int = 0) -> float:
+    base = 2.15 * text_width_mm + 0.75 * text_height_mm
+    return base + decor_count * 80
+
+
+def generate_project(spec: SignSpec) -> Dict:
+    width_mm = spec.width_in * MM_PER_INCH
+    height_mm = spec.height_in * MM_PER_INCH
+    margin_mm = spec.margin_in * MM_PER_INCH
+    text_geom = build_text_geometry(spec.text, spec.font_label, width_mm - 2 * margin_mm, height_mm - 2 * margin_mm)
+    text_x = (width_mm - text_geom["width_mm"]) / 2
+    text_y = (height_mm - text_geom["height_mm"]) / 2
+    text_d = matplotlib_path_to_svg_d(text_geom["vertices"] + np.array([text_x, text_y]), text_geom["codes"], height_mm)
+
+    backing_d = get_backing_path(spec.backing_style, width_mm, height_mm)
+    decor_ds = add_decor_paths(Drawing(), spec.decor_style, width_mm, height_mm)
+
+    hole_r = spec.hole_diameter_mm / 2
+    wire_holes = []
+    if spec.mount_style in {"Wall Mount", "Shelf Stand", "Both"}:
+        wire_holes.append({"cx": width_mm * 0.12, "cy": height_mm * 0.88, "r": hole_r, "type": "LED feed"})
+    else:
+        wire_holes.append({"cx": width_mm * 0.08, "cy": height_mm * 0.92, "r": hole_r, "type": "LED feed"})
+
+    mount_holes = []
+    stand_slots = []
+    if spec.mount_style in {"Wall Mount", "Both"}:
+        mount_holes = [
+            {"cx": width_mm * 0.18, "cy": height_mm * 0.1, "r": 3.0, "type": "mount"},
+            {"cx": width_mm * 0.82, "cy": height_mm * 0.1, "r": 3.0, "type": "mount"},
+        ]
+    if spec.mount_style in {"Shelf Stand", "Both"}:
+        stand_slots = [
+            {"cx": width_mm * 0.35, "cy": height_mm - 10, "w": 18, "h": 5, "type": "stand slot"},
+            {"cx": width_mm * 0.65, "cy": height_mm - 10, "w": 18, "h": 5, "type": "stand slot"},
+        ]
+
+    holes = wire_holes + mount_holes
+    led_length_mm = estimate_led_length_mm(text_geom["width_mm"], text_geom["height_mm"], len(decor_ds))
+
+    return {
+        "canvas": {"width_mm": width_mm, "height_mm": height_mm},
+        "text": {"path_d": text_d, "x_mm": text_x, "y_mm": text_y, "width_mm": text_geom["width_mm"], "height_mm": text_geom["height_mm"]},
+        "backing": {"path_d": backing_d},
+        "decor": decor_ds,
+        "holes": holes,
+        "stand_slots": stand_slots,
+        "led_length_mm": led_length_mm,
+        "spec": asdict(spec),
+    }
+
+
+def render_backing_svg(project: Dict) -> bytes:
+    width_mm = project["canvas"]["width_mm"]
+    height_mm = project["canvas"]["height_mm"]
+    spec = project["spec"]
+    dwg = Drawing(size=(f"{width_mm}mm", f"{height_mm}mm"), viewBox=f"0 0 {width_mm} {height_mm}")
+    dwg.add(Path(d=project["backing"]["path_d"], fill="none", stroke="#0000ff", stroke_width=0.15))
+
+    for h in project["holes"]:
+        dwg.add(Path(d=circle_path(h["cx"], h["cy"], h["r"]), fill="none", stroke="#ff0000", stroke_width=0.15))
+    for s in project["stand_slots"]:
+        dwg.add(Path(d=slot_path(s["cx"], s["cy"], s["w"], s["h"]), fill="none", stroke="#ff0000", stroke_width=0.15))
+
+    return dwg.tostring().encode("utf-8")
+
+
+def render_led_template_svg(project: Dict) -> bytes:
+    width_mm = project["canvas"]["width_mm"]
+    height_mm = project["canvas"]["height_mm"]
+    spec = project["spec"]
+    dwg = Drawing(size=(f"{width_mm}mm", f"{height_mm}mm"), viewBox=f"0 0 {width_mm} {height_mm}")
+    dwg.add(Path(d=project["backing"]["path_d"], fill="none", stroke="#dddddd", stroke_width=0.1))
+    dwg.add(Path(d=project["text"]["path_d"], fill="none", stroke="#00aa00", stroke_width=max(spec["led_channel_offset_mm"], 1.2), stroke_linecap="round", stroke_linejoin="round"))
+    for d in project["decor"]:
+        dwg.add(Path(d=d, fill="none", stroke="#00aa00", stroke_width=max(spec["led_channel_offset_mm"], 1.2), stroke_linecap="round", stroke_linejoin="round"))
+    return dwg.tostring().encode("utf-8")
+
+
+def render_preview_svg(project: Dict) -> bytes:
+    width_mm = project["canvas"]["width_mm"]
+    height_mm = project["canvas"]["height_mm"]
+    spec = project["spec"]
+    led_color = PREVIEW_COLORS.get(spec["led_color_name"], "#ffe9b5")
+    backing_fill = spec["backing_color"]
+
+    dwg = Drawing(size=(f"{width_mm}mm", f"{height_mm}mm"), viewBox=f"0 0 {width_mm} {height_mm}")
+    dwg.add(dwg.rect(insert=(0, 0), size=(width_mm, height_mm), fill="#111111"))
+    dwg.add(Path(d=project["backing"]["path_d"], fill=backing_fill, stroke="#222222", stroke_width=0.6, opacity=0.96))
+
+    for d in [project["text"]["path_d"], *project["decor"]]:
+        dwg.add(Path(d=d, fill="none", stroke=led_color, stroke_opacity=0.18, stroke_width=11.0, stroke_linecap="round", stroke_linejoin="round"))
+        dwg.add(Path(d=d, fill="none", stroke=led_color, stroke_opacity=0.28, stroke_width=8.0, stroke_linecap="round", stroke_linejoin="round"))
+        dwg.add(Path(d=d, fill="none", stroke=led_color, stroke_width=5.2, stroke_linecap="round", stroke_linejoin="round"))
+        dwg.add(Path(d=d, fill="none", stroke="#ffffff", stroke_opacity=0.25, stroke_width=1.2, stroke_linecap="round", stroke_linejoin="round"))
+
+    for h in project["holes"]:
+        dwg.add(Path(d=circle_path(h["cx"], h["cy"], h["r"]), fill="#000000", opacity=0.65))
+    return dwg.tostring().encode("utf-8")
+
+
+def build_cutting_plan(project: Dict) -> str:
+    spec = project["spec"]
+    preset = ACRYLIC_PRESETS[spec["backing_material"]]
+    led_ft = project["led_length_mm"] / 304.8
+    lines = [
+        f"Neon Sign Builder Export",
+        f"Generated: {datetime.utcnow().isoformat()}Z",
+        "",
+        "Project Summary",
+        f"- Text: {spec['text']}",
+        f"- Overall size: {spec['width_in']:.1f} in x {spec['height_in']:.1f} in",
+        f"- Backing style: {spec['backing_style']}",
+        f"- Mount style: {spec['mount_style']}",
+        f"- Backing material: {spec['backing_material']}",
+        f"- LED color preview: {spec['led_color_name']}",
+        f"- Estimated LED run: {project['led_length_mm']:.0f} mm ({led_ft:.1f} ft)",
+        "",
+        "xTool / XCS Guidance",
+        f"- Recommended EasySet profile: {preset['xtool_profile']}",
+        "- Import backing.svg and led_template.svg into XCS.",
+        "- Apply the matching acrylic EasySet profile at job setup time.",
+        "- Keep vectors as separate layers so outer cut, holes, and any engraving can be assigned deliberately.",
+        "",
+        "Precautions",
+    ]
+    lines.extend(f"- {n}" for n in preset["notes"])
+    lines.extend(
+        [
+            "",
+            "Layer Intent",
+            "- backing.svg: cut outer profile and drill/cut holes/slots.",
+            "- led_template.svg: placement guide for LED / faux-neon path layout.",
+            "- preview.svg: customer-facing visual only, not for machining.",
+            "",
+            "Fabrication Notes",
+            "- Feed the LED lead through the dedicated wire hole.",
+            "- Use the stand slots only if you are fabricating separate feet.",
+            "- Test-fit one prototype before production, especially for power-lead clearance and stand balance.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def export_zip(project: Dict) -> bytes:
+    backing_svg = render_backing_svg(project)
+    led_svg = render_led_template_svg(project)
+    preview_svg = render_preview_svg(project)
+    plan_txt = build_cutting_plan(project).encode("utf-8")
+    manifest = json.dumps(project, indent=2).encode("utf-8")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("backing.svg", backing_svg)
+        zf.writestr("led_template.svg", led_svg)
+        zf.writestr("preview.svg", preview_svg)
+        zf.writestr("cutting_plan.txt", plan_txt)
+        zf.writestr("project_manifest.json", manifest)
+    return buf.getvalue()

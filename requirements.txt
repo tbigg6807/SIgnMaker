@@ -1,0 +1,57 @@
+# Neon Sign Builder for xTool P2
+
+A Streamlit web app that lets a user create a simple acrylic-backed faux-neon sign without using separate design software.
+
+## What it does
+
+- Lets the user pick sign text, font style, color, backing shape, mount style, and decorative elements
+- Auto-generates a backing panel outline
+- Adds wire feed holes automatically
+- Adds optional wall-mount holes and shelf-stand slots
+- Scales the layout to the requested physical size
+- Produces:
+  - `backing.svg` for cutting the acrylic backer
+  - `led_template.svg` for LED / neon path placement guidance
+  - `preview.svg` for a customer-facing mockup
+  - `cutting_plan.txt` with xTool material-profile guidance and fabrication notes
+  - `project_manifest.json` for debug / future extension
+
+## Important limitation
+
+This app does **not** create native `.xcs` project files. That is deliberate.
+
+xTool Creative Space supports importing SVG and DXF files, and native XCS files are created and saved by xTool software itself. The cleanest reliable workflow is therefore:
+
+1. Build the design in this app
+2. Export the ZIP or individual SVG files
+3. Import the SVG files into XCS
+4. Apply the correct xTool EasySet material profile inside XCS before cutting
+
+## Why the material settings are handled this way
+
+xTool states that its Material Settings Library / EasySet is the primary source for the most up-to-date and definitive material parameters. The app therefore provides the matching material profile name and job-prep notes rather than pretending to hard-code universally safe numbers.
+
+## Run locally
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## Deploy to Streamlit Community Cloud
+
+1. Create a GitHub repo
+2. Upload these files
+3. In Streamlit Community Cloud, point the app to `app.py`
+4. Deploy
+
+## Recommended next enhancements
+
+- True script fonts and handwritten styles using bundled font files that you legally own
+- More advanced contour-following backing shapes
+- Separate foot-piece generator for shelf stands
+- Multiple lines of text
+- Logo import and auto-trace
+- BOM calculator for acrylic, LED length, PSU, wire, and standoffs
+- DXF export in addition to SVG
+- Checkout / quoting workflow
