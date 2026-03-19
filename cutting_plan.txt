@@ -1,0 +1,32 @@
+Neon Sign Builder Export
+Generated: 2026-03-19T13:53:51.974155Z
+
+Project Summary
+- Text: Hello
+- Overall size: 18.0 in x 10.0 in
+- Backing style: Rounded Rectangle
+- Mount style: Wall Mount
+- Backing material: 3mm White Acrylic
+- LED color preview: Warm White
+- Estimated LED run: 1143 mm (3.8 ft)
+
+xTool / XCS Guidance
+- Recommended EasySet profile: 1/8"(3mm) White Acrylic
+- Import backing.svg and led_template.svg into XCS.
+- Apply the matching acrylic EasySet profile at job setup time.
+- Keep vectors as separate layers so outer cut, holes, and any engraving can be assigned deliberately.
+
+Precautions
+- Good for a clean opaque backing.
+- Remove the protective film before processing if the selected xTool material guidance requires it.
+- Turn on air assist and use ventilation.
+
+Layer Intent
+- backing.svg: cut outer profile and drill/cut holes/slots.
+- led_template.svg: placement guide for LED / faux-neon path layout.
+- preview.svg: customer-facing visual only, not for machining.
+
+Fabrication Notes
+- Feed the LED lead through the dedicated wire hole.
+- Use the stand slots only if you are fabricating separate feet.
+- Test-fit one prototype before production, especially for power-lead clearance and stand balance.
