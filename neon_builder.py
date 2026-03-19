@@ -1,5 +1,4 @@
 import io
-import math
 from typing import Dict, List
 
 import svgwrite
@@ -111,7 +110,7 @@ def build_sign_package(
     preview = Image.new("RGBA", (canvas_w, canvas_h), (20, 20, 24, 255))
     draw = ImageDraw.Draw(preview)
 
-    # backing
+    # backing preview bitmap
     draw.rounded_rectangle(
         [backing_x, backing_y, backing_x + backing_w, backing_y + backing_h],
         radius=max(12, int(min(backing_w, backing_h) * 0.06)),
@@ -137,13 +136,21 @@ def build_sign_package(
     draw = ImageDraw.Draw(preview)
     draw.text((tx, ty), sign_text, font=font, fill=(*rgb, 255))
 
-    # decorative elements
     if "star" in decorative_elements:
-        draw.text((backing_x + 24, backing_y + 24), "★", font=get_font(50, "Block"), fill=(*rgb, 220))
+        draw.text(
+            (backing_x + 24, backing_y + 24),
+            "★",
+            font=get_font(50, "Block"),
+            fill=(*rgb, 220),
+        )
     if "heart" in decorative_elements:
-        draw.text((backing_x + backing_w - 70, backing_y + 20), "♥", font=get_font(48, "Block"), fill=(*rgb, 220))
+        draw.text(
+            (backing_x + backing_w - 70, backing_y + 20),
+            "♥",
+            font=get_font(48, "Block"),
+            fill=(*rgb, 220),
+        )
 
-    # wire hole and mount holes
     hole_r = 8
     wire_hole_center = (backing_x + backing_w - 24, backing_y + backing_h - 24)
     draw.ellipse(
@@ -172,19 +179,50 @@ def build_sign_package(
         slot_y = backing_y + backing_h - 12
         slot1_x = backing_x + backing_w * 0.28
         slot2_x = backing_x + backing_w * 0.62
-        draw.rounded_rectangle([slot1_x, slot_y, slot1_x + slot_w, slot_y + slot_h], radius=3, outline=(120, 255, 120, 220), width=2)
-        draw.rounded_rectangle([slot2_x, slot_y, slot2_x + slot_w, slot_y + slot_h], radius=3, outline=(120, 255, 120, 220), width=2)
+        draw.rounded_rectangle(
+            [slot1_x, slot_y, slot1_x + slot_w, slot_y + slot_h],
+            radius=3,
+            outline=(120, 255, 120, 220),
+            width=2,
+        )
+        draw.rounded_rectangle(
+            [slot2_x, slot_y, slot2_x + slot_w, slot_y + slot_h],
+            radius=3,
+            outline=(120, 255, 120, 220),
+            width=2,
+        )
 
     # backing SVG
-    dwg_backing = svgwrite.Drawing(size=(f"{width_in}in", f"{height_in}in"), viewBox=f"0 0 {canvas_w} {canvas_h}")
-    base_shape = build_backing_shape(dwg_backing, backing_shape, backing_x, backing_y, backing_w, backing_h)
+    dwg_backing = svgwrite.Drawing(
+        size=(f"{width_in}in", f"{height_in}in"),
+        viewBox=f"0 0 {canvas_w} {canvas_h}",
+    )
+    base_shape = build_backing_shape(
+        dwg_backing, backing_shape, backing_x, backing_y, backing_w, backing_h
+    )
     base_shape.update({"fill": "none", "stroke": "red", "stroke_width": 2})
     dwg_backing.add(base_shape)
 
-    dwg_backing.add(dwg_backing.circle(center=wire_hole_center, r=hole_r, fill="none", stroke="blue", stroke_width=2))
+    dwg_backing.add(
+        dwg_backing.circle(
+            center=wire_hole_center,
+            r=hole_r,
+            fill="none",
+            stroke="blue",
+            stroke_width=2,
+        )
+    )
 
     for cx, cy in mount_holes:
-        dwg_backing.add(dwg_backing.circle(center=(cx, cy), r=7, fill="none", stroke="blue", stroke_width=2))
+        dwg_backing.add(
+            dwg_backing.circle(
+                center=(cx, cy),
+                r=7,
+                fill="none",
+                stroke="blue",
+                stroke_width=2,
+            )
+        )
 
     if mount_style == "Shelf Stand":
         slot_w = 28
@@ -192,11 +230,34 @@ def build_sign_package(
         slot_y = backing_y + backing_h - 12
         slot1_x = backing_x + backing_w * 0.28
         slot2_x = backing_x + backing_w * 0.62
-        dwg_backing.add(dwg_backing.rect(insert=(slot1_x, slot_y), size=(slot_w, slot_h), rx=3, ry=3, fill="none", stroke="green", stroke_width=2))
-        dwg_backing.add(dwg_backing.rect(insert=(slot2_x, slot_y), size=(slot_w, slot_h), rx=3, ry=3, fill="none", stroke="green", stroke_width=2))
+        dwg_backing.add(
+            dwg_backing.rect(
+                insert=(slot1_x, slot_y),
+                size=(slot_w, slot_h),
+                rx=3,
+                ry=3,
+                fill="none",
+                stroke="green",
+                stroke_width=2,
+            )
+        )
+        dwg_backing.add(
+            dwg_backing.rect(
+                insert=(slot2_x, slot_y),
+                size=(slot_w, slot_h),
+                rx=3,
+                ry=3,
+                fill="none",
+                stroke="green",
+                stroke_width=2,
+            )
+        )
 
     # LED template SVG
-    dwg_led = svgwrite.Drawing(size=(f"{width_in}in", f"{height_in}in"), viewBox=f"0 0 {canvas_w} {canvas_h}")
+    dwg_led = svgwrite.Drawing(
+        size=(f"{width_in}in", f"{height_in}in"),
+        viewBox=f"0 0 {canvas_w} {canvas_h}",
+    )
     dwg_led.add(
         dwg_led.text(
             sign_text,
@@ -211,16 +272,55 @@ def build_sign_package(
     )
 
     if "star" in decorative_elements:
-        dwg_led.add(dwg_led.text("★", insert=(backing_x + 24, backing_y + 64), fill="none", stroke="orange", stroke_width=1, font_size=48))
+        dwg_led.add(
+            dwg_led.text(
+                "★",
+                insert=(backing_x + 24, backing_y + 64),
+                fill="none",
+                stroke="orange",
+                stroke_width=1,
+                font_size=48,
+            )
+        )
     if "heart" in decorative_elements:
-        dwg_led.add(dwg_led.text("♥", insert=(backing_x + backing_w - 70, backing_y + 62), fill="none", stroke="orange", stroke_width=1, font_size=46))
+        dwg_led.add(
+            dwg_led.text(
+                "♥",
+                insert=(backing_x + backing_w - 70, backing_y + 62),
+                fill="none",
+                stroke="orange",
+                stroke_width=1,
+                font_size=46,
+            )
+        )
 
-    # Preview SVG
-    dwg_preview = svgwrite.Drawing(size=(f"{width_in}in", f"{height_in}in"), viewBox=f"0 0 {canvas_w} {canvas_h}")
-    dwg_preview.add(dwg_preview.rect(insert=(0, 0), size=(canvas_w, canvas_h), fill="rgb(20,20,24)"))
-    base_preview_shape = build_backing_shape(dwg_preview, backing_shape, backing_x, backing_y, backing_w, backing_h)
-    base_preview_shape.update({"fill": "rgba(220,230,240,0.18)", "stroke": "rgba(180,190,205,0.8)", "stroke_width": 2})
+    # preview SVG
+    dwg_preview = svgwrite.Drawing(
+        size=(f"{width_in}in", f"{height_in}in"),
+        viewBox=f"0 0 {canvas_w} {canvas_h}",
+    )
+    dwg_preview.add(
+        dwg_preview.rect(
+            insert=(0, 0),
+            size=(canvas_w, canvas_h),
+            fill="rgb(20,20,24)",
+        )
+    )
+
+    base_preview_shape = build_backing_shape(
+        dwg_preview, backing_shape, backing_x, backing_y, backing_w, backing_h
+    )
+    base_preview_shape.update(
+        {
+            "fill": "rgb(220,230,240)",
+            "fill_opacity": 0.18,
+            "stroke": "rgb(180,190,205)",
+            "stroke_opacity": 0.8,
+            "stroke_width": 2,
+        }
+    )
     dwg_preview.add(base_preview_shape)
+
     dwg_preview.add(
         dwg_preview.text(
             sign_text,
